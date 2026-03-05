@@ -92,7 +92,7 @@ use project::{
     debugger::{breakpoint_store::BreakpointStoreEvent, session::ThreadStatus},
     project_settings::ProjectSettings,
     toolchain_store::ToolchainStoreEvent,
-    trusted_worktrees::{RemoteHostLocation, TrustedWorktrees, TrustedWorktreesEvent},
+    trusted_worktrees::{PathTrust, RemoteHostLocation, TrustedWorktrees, TrustedWorktreesEvent},
 };
 use remote::{
     RemoteClientDelegate, RemoteConnection, RemoteConnectionOptions,
@@ -7136,6 +7136,36 @@ impl Workspace {
                 self.toggle_modal(window, cx, |_, cx| {
                     SecurityModal::new(worktree_store, remote_host, cx)
                 });
+            } else {
+                // Restrict Trusted Worktrees and reopen Security Modal
+                if let Some(trusted_worktrees) = TrustedWorktrees::try_get_global(cx) {
+                    let worktrees_to_restrict: HashSet<PathTrust> = {
+                        let project = self.project().read(cx);
+                        let worktree_store = project.worktree_store();
+                        worktree_store
+                            .read(cx)
+                            .visible_worktrees(cx)
+                            .map(|worktree| PathTrust::Worktree(worktree.read(cx).id()))
+                            .collect()
+                    };
+
+                    if !worktrees_to_restrict.is_empty() {
+                        let worktree_store = self.project().read(cx).worktree_store();
+                        let weak_worktree_store = worktree_store.downgrade();
+
+                        trusted_worktrees.update(cx, |store, cx| {
+                            store.restrict(weak_worktree_store, worktrees_to_restrict, cx);
+                        });
+
+                        let project = self.project().read(cx);
+                        let remote_host = project
+                            .remote_connection_options(cx)
+                            .map(RemoteHostLocation::from);
+                        self.toggle_modal(window, cx, |_, cx| {
+                            SecurityModal::new(worktree_store.downgrade(), remote_host, cx)
+                        });
+                    }
+                }
             }
         }
     }
